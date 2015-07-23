@@ -1,0 +1,19 @@
+# Compiled python modules.
+*.pyc
+
+# Vim swap files
+.*.swp
+
+# Setuptools build and distribution folders.
+/build/
+/dist/
+
+# Python egg metadata, regenerated from source files by setuptools.
+/*.egg-info
+/*.egg
+
+# Debian pybuild temporary directory
+/.pybuild/
+
+# Python code coverage metadata
+/.coverage

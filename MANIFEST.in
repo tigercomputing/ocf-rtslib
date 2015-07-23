@@ -1,0 +1,5 @@
+include COPYING
+include Makefile
+include README.md
+include setup.cfg
+recursive-include doc/source *
