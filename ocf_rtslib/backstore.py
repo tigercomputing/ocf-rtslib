@@ -29,6 +29,15 @@ import sys
 from ocf.util import cached_property
 from rtslib import RTSLibError
 
+#: List of kernel modules to load to bring up the target. This includes the
+#: target core module as well as any relevant backstore modules.
+TARGET_CORE_MODULES = [
+    'target_core_mod',
+    'target_core_file',
+    'target_core_iblock',
+    'target_core_pscsi',
+]
+
 
 class LockFile(object):
     def __init__(self, path):
@@ -239,6 +248,37 @@ run on, which is used to generate consistent ALUA port group IDs.
                 print("failed to mount configfs: {ret}".format(ret=ret),
                       file=sys.stderr)
                 return ocf.OCF_ERR_INSTALLED
+
+        # Ensure the target modules are loaded
+        if not os.path.isdir('/sys/kernel/config/target'):
+            # Get a list of all currently loaded kernel modules
+            with open('/proc/modules', 'r') as fp:
+                loaded_modules = [x.split()[0] for x in fp]
+
+            # Make sure each of the target modules is loaded
+            for mod in TARGET_CORE_MODULES:
+                # Skip if already loaded
+                if mod in loaded_modules:
+                    continue
+
+                ret = subprocess.call(['modprobe', mod])
+                if ret:
+                    # FIXME: use HA logging
+                    print("failed to modprobe {mod}".format(mod=mod),
+                          file=sys.stderr)
+                    return ocf.OCF_ERR_INSTALLED
+
+            # Now that the modules are loaded, the directory may have already
+            # appeared or we may have to create it, depending on the kernel
+            # version.
+            if not os.path.isdir('/sys/kernel/config/target'):
+                try:
+                    os.mkdir('/sys/kernel/config/target')
+                except OSError:
+                    # FIXME: use HA logging
+                    print("failed to create target config directory'",
+                          file=sys.stderr)
+                    return ocf.OCF_ERR_INSTALLED
 
         return ocf.OCF_SUCCESS
 
