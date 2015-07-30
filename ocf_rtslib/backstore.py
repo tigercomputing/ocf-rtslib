@@ -117,13 +117,17 @@ run on, which is used to generate consistent ALUA port group IDs.
 
     @cached_property
     def storage_object(self):
-        for bs in self.rtsroot.backstores:
-            if bs.plugin != self.hba_type:
-                continue
+        try:
+            for bs in self.rtsroot.backstores:
+                if bs.plugin != self.hba_type:
+                    continue
 
-            for so in bs.storage_objects:
-                if so.name == self.name:
-                    return so
+                for so in bs.storage_objects:
+                    if so.name == self.name:
+                        return so
+        except RTSLibError:
+            # target core probably isn't loaded
+            pass
 
         return None
 
