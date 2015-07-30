@@ -74,7 +74,7 @@ class BackStoreAgent(ocf.ResourceAgent):
     then be exported to an initiator via a number of transports, including
     iSCSI, FCoE, Fibre Channel, etc...
 
-    This resource can be run a a single primitive or as a multistate
+    This resource can be run as a single primitive or as a multistate
     (master/slave) resource. When used in multistate mode, the resource agent
     manages ALUA attributes for multipathing.
     """
@@ -351,7 +351,8 @@ run on, which is used to generate consistent ALUA port group IDs.
             # We are in slave or master mode
 
             # Count how many target ports this backing device is a member of
-            num_target_ports = len(self.get_alua('members').splitlines())
+            ports = [x for x in self.get_alua('members').splitlines() if x]
+            num_target_ports = len(ports)
 
             # Our score is simply 1000 times the number of ports we are a
             # member of. This works pretty well: until our fabric is configured
