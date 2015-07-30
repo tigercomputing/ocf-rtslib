@@ -146,6 +146,9 @@ run on, which is used to generate consistent ALUA port group IDs.
 
     @cached_property
     def alua_ptgp_id(self):
+        if not self.alua_hosts:
+            raise ValueError('alua_hosts is not set')
+
         return self.alua_hosts.split().index(self.alua_ptgp_name) + 16
 
     @property
@@ -307,9 +310,10 @@ run on, which is used to generate consistent ALUA port group IDs.
             raise NotImplementedError()
 
         # Now set all the attributes as requested
-        for attr in self.attrib.split():
-            (name, value) = attr.split('=', 1)
-            so.set_attribute(name, value)
+        if self.attrib:
+            for attr in self.attrib.split():
+                (name, value) = attr.split('=', 1)
+                so.set_attribute(name, value)
 
     @ocf.Action(timeout=120)
     def stop(self):
