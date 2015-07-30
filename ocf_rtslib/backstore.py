@@ -25,6 +25,7 @@ import rtslib
 import rtslib.utils
 import subprocess
 import sys
+import time
 
 from ocf.util import cached_property
 from rtslib import RTSLibError
@@ -124,7 +125,7 @@ run on, which is used to generate consistent ALUA port group IDs.
     def rtsroot(self):
         return rtslib.RTSRoot()
 
-    @cached_property
+    @property
     def storage_object(self):
         try:
             for bs in self.rtsroot.backstores:
@@ -142,10 +143,16 @@ run on, which is used to generate consistent ALUA port group IDs.
 
     @cached_property
     def alua_ptgp_name(self):
-        return platform.node()
+        if not ocf.env.is_ms:
+            return 'default_tg_pt_gp'
+        else:
+            return platform.node()
 
     @cached_property
     def alua_ptgp_id(self):
+        if not ocf.env.is_ms:
+            return 0
+
         if not self.alua_hosts:
             raise ValueError('alua_hosts is not set')
 
@@ -285,6 +292,82 @@ run on, which is used to generate consistent ALUA port group IDs.
 
         return ocf.OCF_SUCCESS
 
+    def _create_alua_ptgp(self, pt_gp_name=None):
+        if pt_gp_name is None:
+            pt_gp_name = self.alua_ptgp_name
+
+        pt_gp_id = self.alua_hosts.split().index(pt_gp_name) + 16
+        so_path = self.storage_object.path
+        alua_dir = os.path.join(so_path, 'alua', pt_gp_name)
+
+        # FIXME: use HA logging
+        print("Creating ALUA TPG {name}; ID {id}".format(
+            name=pt_gp_name, id=pt_gp_id), file=sys.stderr)
+
+        if not os.path.isdir(alua_dir):
+            os.mkdir(alua_dir)
+
+        with open(os.path.join(alua_dir, 'tg_pt_gp_id'), 'w') as fd:
+            fd.write(str(pt_gp_id) + "\n")
+
+    def get_alua(self, prop, pt_gp_name=None):
+        if pt_gp_name is None:
+            pt_gp_name = self.alua_ptgp_name
+
+        so_path = self.storage_object.path
+        prop_path = os.path.join(so_path, 'alua', pt_gp_name, prop)
+
+        with open(prop_path, 'r') as fd:
+            return fd.read()
+
+    def set_alua(self, prop, value, pt_gp_name=None):
+        if pt_gp_name is None:
+            pt_gp_name = self.alua_ptgp_name
+
+        so_path = self.storage_object.path
+        prop_path = os.path.join(so_path, 'alua', pt_gp_name, prop)
+
+        with open(prop_path, 'w') as fd:
+            fd.write(value)
+
+    def _set_master_score(self, score):
+        if score is None:
+            subprocess.check_call(
+                ['/usr/sbin/crm_master', '-l', 'reboot', '-D'])
+        else:
+            subprocess.check_call(
+                ['/usr/sbin/crm_master', '-Q', '-l', 'reboot', '-v',
+                 str(score)])
+
+    def _update_master_score(self, status):
+        # Only update master score if this is a master/slave resource
+        if not ocf.env.is_ms:
+            return
+
+        if status == ocf.OCF_NOT_RUNNING or self.storage_object is None:
+            # We are stopped; we should not offer to become master at all
+            self._set_master_score(None)
+        elif status == ocf.OCF_SUCCESS or status == ocf.OCF_RUNNING_MASTER:
+            # We are in slave or master mode
+
+            # Count how many target ports this backing device is a member of
+            num_target_ports = len(self.get_alua('members').splitlines())
+
+            # Our score is simply 1000 times the number of ports we are a
+            # member of. This works pretty well: until our fabric is configured
+            # we refuse to become master on this node. If there are multiple
+            # fabrics, the node with the most configured fabrics is preferred.
+            score = num_target_ports * 1000
+
+            # FIXME: use HA logging
+            print("Setting master score to: {score}".format(score=score),
+                  file=sys.stderr)
+
+            self._set_master_score(score)
+        else:
+            # Some kind of error; we should not offer to become master at all
+            self._set_master_score(None)
+
     @ocf.Action(timeout=40)
     def start(self):
         # Make sure our basic infrastructure is present
@@ -293,7 +376,7 @@ run on, which is used to generate consistent ALUA port group IDs.
             return ret
 
         # Check whether we need to do anything
-        ret = self.monitor()
+        ret = self._monitor()
         if ret == ocf.OCF_SUCCESS:
             # FIXME: use HA logging
             print("Resource is already running", file=sys.stderr)
@@ -305,15 +388,29 @@ run on, which is used to generate consistent ALUA port group IDs.
         print("Created storage object: {so.path}".format(so=so),
               file=sys.stderr)
 
+        # Configure ALUA
         if ocf.env.is_ms:
-            # FIXME: configure ALUA
-            raise NotImplementedError()
+            # Create ALUA target port group
+            self._create_alua_ptgp()
+
+            # Set up Implicit ALUA (controlled by target only)
+            self.set_alua('alua_access_type', '1\n')
+
+            # Start up in 'slave' mode: ALUA_ACCESS_STATE_STANDBY and no pref
+            self.set_alua('alua_access_state', '2\n')
+            self.set_alua('preferred', '0\n')
+        else:
+            # Disable ALUA completely
+            self.set_alua('alua_access_type', '0\n')
+            self.set_alua('preferred', '0\n')
 
         # Now set all the attributes as requested
         if self.attrib:
             for attr in self.attrib.split():
                 (name, value) = attr.split('=', 1)
                 so.set_attribute(name, value)
+
+        self._update_master_score(ocf.OCF_SUCCESS)
 
     @ocf.Action(timeout=120)
     def stop(self):
@@ -322,16 +419,28 @@ run on, which is used to generate consistent ALUA port group IDs.
         if so is None:
             return ocf.OCF_SUCCESS
 
+        # Remove all the ALUA target port groups
+        for alua_dir, pt_gp_names, _ in os.walk(os.path.join(so.path, 'alua')):
+            for pt_gp_name in pt_gp_names:
+                # Skip the default port group; we can't remove it
+                if pt_gp_name == 'default_tg_pt_gp':
+                    continue
+
+                # Remove the port group
+                os.rmdir(os.path.join(alua_dir, pt_gp_name))
+
+            # Break out of the walk; we only want to walk the alua_dir
+            break
+
         # Now delete the device and the HBA
         so.delete()
         so.backstore.delete()
 
+        self._update_master_score(ocf.OCF_NOT_RUNNING)
+
         return ocf.OCF_SUCCESS
 
-    @ocf.Action(timeout=20, depth=0, interval=10)
-    # @ocf.Action(timeout=20, depth=0, interval=20, role='Slave')
-    # @ocf.Action(timeout=20, depth=0, interval=10, role='Master')
-    def monitor(self):
+    def _monitor(self):
         # If there isn't a storage object with the given type and name, the
         # resource can't be running.
         so = self.storage_object
@@ -346,20 +455,127 @@ run on, which is used to generate consistent ALUA port group IDs.
         if not ocf.env.is_ms:
             return ocf.OCF_SUCCESS
 
-        # FIXME: check ALUA state for master/slave resources
-        raise NotImplementedError()
+        alua_state = int(self.get_alua('alua_access_state').strip())
+        alua_pref = int(self.get_alua('preferred').strip())
 
-    # @ocf.Action(timeout=90)
-    # def promote(self):
-    #     pass
+        if alua_state == 0 and alua_pref == 1:
+            # ALUA_ACCESS_STATE_ACTIVE_OPTIMIZED and preferred path
+            return ocf.OCF_RUNNING_MASTER
+        elif alua_state == 2 and alua_pref == 0:
+            # ALUA_ACCESS_STATE_STANDBY and not preferred path
+            return ocf.OCF_SUCCESS  # slave
+        else:
+            return ocf.OCF_FAILED_MASTER
 
-    # @ocf.Action(timeout=90)
-    # def demote(self):
-    #     pass
+    @ocf.Action(timeout=20, depth=0, interval=10)
+    @ocf.Action(timeout=20, depth=0, interval=20, role='Slave')
+    @ocf.Action(timeout=20, depth=0, interval=10, role='Master')
+    def monitor(self):
+        ret = self._monitor()
+        self._update_master_score(ret)
+        return ret
 
-    # @ocf.Action(timeout=90)
-    # def notify(self):
-    #     pass
+    @ocf.Action(timeout=90)
+    def promote(self):
+        ret = ocf.OCF_ERR_GENERIC
+        first_try = True
+
+        # Keep trying to promote the resource;
+        # wait for the CRM to time us out if this fails
+        while True:
+            status = self._monitor()
+
+            if status == ocf.OCF_SUCCESS:  # in slave mode
+                # FIXME: use HA logging
+                print("Attempting to promote.", file=sys.stderr)
+
+                # Set ALUA_ACCESS_STATE_ACTIVE_OPTIMIZED and preferred path
+                self.set_alua('alua_access_state', '0\n')
+                self.set_alua('preferred', '1\n')
+
+                # Go around the loop again to make sure we come up as
+                # OCF_RUNNING_MASTER
+            elif status == ocf.OCF_NOT_RUNNING:
+                # FIXME: use HA logging
+                print("Trying to promote a resource that was not started!",
+                      file=sys.stderr)
+                break
+            elif status == ocf.OCF_RUNNING_MASTER:
+                # FIXME: use HA logging
+                print("Promotion successful.", file=sys.stderr)
+                ret = ocf.OCF_SUCCESS
+                self._update_master_score(status)
+                break
+
+            # Avoid a busy loop
+            if not first_try:
+                time.sleep(1)
+            first_try = False
+
+        # avoid too tight pacemaker driven "recovery" loop if promotion keeps
+        # failing for some reason
+        if ret != ocf.OCF_SUCCESS:
+            # FIXME: use HA logging
+            print("Promotion failed; sleeping 15s to prevent tight recovery "
+                  "loop", file=sys.stderr)
+            time.sleep(15)
+
+        return ret
+
+    @ocf.Action(timeout=90)
+    def demote(self):
+        ret = ocf.OCF_ERR_GENERIC
+        first_try = True
+
+        # Keep trying to promote the resource;
+        # wait for the CRM to time us out if this fails
+        while True:
+            status = self._monitor()
+
+            if status == ocf.OCF_SUCCESS:  # in slave mode
+                # FIXME: use HA logging
+                print("Demotion successful.", file=sys.stderr)
+                ret = ocf.OCF_SUCCESS
+                self._update_master_score(status)
+                break
+            elif status == ocf.OCF_NOT_RUNNING:
+                # FIXME: use HA logging
+                print("Trying to demote a resource that was not started!",
+                      file=sys.stderr)
+                break
+            elif status == ocf.OCF_RUNNING_MASTER:
+                # FIXME: use HA logging
+                print("Attempting to demote.", file=sys.stderr)
+
+                # Set ALUA_ACCESS_STATE_STANDBY and no preference
+                self.set_alua('alua_access_state', '2\n')
+                self.set_alua('preferred', '0\n')
+
+                # Go around the loop again to make sure we come up as a slave
+                # (OCF_SUCCESS)
+
+            # Avoid a busy loop
+            if not first_try:
+                time.sleep(1)
+            first_try = False
+
+        # avoid too tight pacemaker driven "recovery" loop if demotion keeps
+        # failing for some reason
+        if ret != ocf.OCF_SUCCESS:
+            # FIXME: use HA logging
+            print("Demotion failed; sleeping 15s to prevent tight recovery "
+                  "loop", file=sys.stderr)
+            time.sleep(15)
+
+        return ret
+
+    @ocf.Action(timeout=90)
+    def notify(self):
+        # TODO: use notifications to set state of all ALUA port groups at the
+        # same time, so that initiators know the state of all port groups by
+        # querying any single target port. This is required by certain
+        # initiators like VMware.
+        pass
 
     def validate_all(self):
         ret = super(BackStoreAgent, self).validate_all()
