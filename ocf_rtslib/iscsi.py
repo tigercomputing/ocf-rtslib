@@ -15,8 +15,6 @@
 # with this program; if not, write to the Free Software Foundation, Inc.,
 # 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
-from __future__ import print_function
-
 import ocf
 import os
 import platform
@@ -31,7 +29,7 @@ from rtslib import RTSLibError
 
 #: List of kernel modules to load to bring up the target. This includes the
 #: target core module as well as any relevant backstore modules.
-TARGET_CORE_MODULES = [
+TARGET_ISCSI_MODULES = [
     'iscsi_target_mod',
 ]
 
@@ -171,16 +169,14 @@ mode.
                 loaded_modules = [x.split()[0] for x in fp]
 
             # Make sure each of the target modules is loaded
-            for mod in TARGET_CORE_MODULES:
+            for mod in TARGET_ISCSI_MODULES:
                 # Skip if already loaded
                 if mod in loaded_modules:
                     continue
 
                 ret = subprocess.call(['modprobe', mod])
                 if ret:
-                    # FIXME: use HA logging
-                    print("failed to modprobe {mod}".format(mod=mod),
-                          file=sys.stderr)
+                    ocf.log.error("failed to modprobe {mod}".format(mod=mod))
                     return ocf.OCF_ERR_INSTALLED
 
             # Now that the modules are loaded, the directory may have already
@@ -190,9 +186,8 @@ mode.
                 try:
                     os.mkdir('/sys/kernel/config/target/iscsi')
                 except OSError:
-                    # FIXME: use HA logging
-                    print("failed to create iSCSI target config directory'",
-                          file=sys.stderr)
+                    ocf.log.error('failed to create iSCSI target config '
+                                  'directory')
                     return ocf.OCF_ERR_INSTALLED
 
         return ocf.OCF_SUCCESS
@@ -202,8 +197,7 @@ mode.
         # Check whether we need to do anything
         ret = self.monitor()
         if ret == ocf.OCF_SUCCESS:
-            # FIXME: use HA logging
-            print("Resource is already running", file=sys.stderr)
+            ocf.log.warning('Resource is already running')
             return ret
 
         # Create the target if it doesn't exist
@@ -289,30 +283,26 @@ mode.
             return ret
 
         if not self.fabric.is_valid_wwn(self.iqn):
-            # FIXME: use HA logging
-            print("Target WWN is not valid for fabric: {0}".format(self.iqn),
-                  file=sys.stderr)
+            ocf.log.error("Target WWN is not valid for fabric: {0}"
+                          .format(self.iqn))
             return ocf.OCF_ERR_CONFIGURED
 
         for initiator in self.initiators.split():
             if not self.fabric.is_valid_wwn(initiator):
-                # FIXME: use HA logging
-                print("Initiator WWN is not valid for fabric: {0}".format(
-                    initiator), file=sys.stderr)
+                ocf.log.error("Initiator WWN is not valid for fabric: {0}"
+                              .format(initiator))
                 return ocf.OCF_ERR_CONFIGURED
 
         for portal in self.portals.split():
             match = self.IP_PORT_RE.search(portal)
             if not match:
-                # FIXME: use HA logging
-                print("Invalid portal: {0}".format(portal), file=sys.stderr)
+                ocf.log.error("Invalid portal: {0}".format(portal))
                 return ocf.OCF_ERR_CONFIGURED
 
         try:
             self.storage_objects
         except ValueError as e:
-            # FIXME: use HA logging
-            print("LUNs list invalid: {0}".format(e), file=sys.stderr)
+            ocf.log.error("LUNs list invalid: {0}".format(e))
             return ocf.OCF_ERR_CONFIGURED
 
         return ocf.OCF_SUCCESS
