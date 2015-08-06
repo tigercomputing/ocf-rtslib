@@ -15,8 +15,6 @@
 # with this program; if not, write to the Free Software Foundation, Inc.,
 # 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
-from __future__ import print_function
-
 import fcntl
 import ocf
 import os
@@ -24,7 +22,6 @@ import platform
 import rtslib
 import rtslib.utils
 import subprocess
-import sys
 import time
 
 from ocf.util import cached_property
@@ -231,17 +228,15 @@ run on, which is used to generate consistent ALUA port group IDs.
                 try:
                     os.mkdir(d)
                 except OSError:
-                    # FIXME: use HA logging
-                    print("failed to create directory: {d}".format(d=d),
-                          file=sys.stderr)
+                    ocf.log.error("failed to create directory: {d}"
+                                  .format(d=d))
                     return ocf.OCF_ERR_INSTALLED
 
         # Ensure configfs is loaded
         if not os.path.isdir('/sys/kernel/config'):
             ret = subprocess.call(['modprobe', 'configfs'])
             if ret:
-                # FIXME: use HA logging
-                print("failed to modprobe configfs", file=sys.stderr)
+                ocf.log.error('failed to modprobe configfs')
                 return ocf.OCF_ERR_INSTALLED
 
         # Ensure configfs is mounted. We do this by just trying to mount it and
@@ -254,9 +249,8 @@ run on, which is used to generate consistent ALUA port group IDs.
                 stdout=devnull, stderr=devnull)
             if ret not in [0, 32]:
                 # 0 = mounted OK, 32 = already mounted
-                # FIXME: use HA logging
-                print("failed to mount configfs: {ret}".format(ret=ret),
-                      file=sys.stderr)
+                ocf.log.error("failed to mount configfs: {ret}"
+                              .format(ret=ret))
                 return ocf.OCF_ERR_INSTALLED
 
         # Ensure the target modules are loaded
@@ -273,9 +267,7 @@ run on, which is used to generate consistent ALUA port group IDs.
 
                 ret = subprocess.call(['modprobe', mod])
                 if ret:
-                    # FIXME: use HA logging
-                    print("failed to modprobe {mod}".format(mod=mod),
-                          file=sys.stderr)
+                    ocf.log.error("failed to modprobe {mod}".format(mod=mod))
                     return ocf.OCF_ERR_INSTALLED
 
             # Now that the modules are loaded, the directory may have already
@@ -285,9 +277,7 @@ run on, which is used to generate consistent ALUA port group IDs.
                 try:
                     os.mkdir('/sys/kernel/config/target')
                 except OSError:
-                    # FIXME: use HA logging
-                    print("failed to create target config directory'",
-                          file=sys.stderr)
+                    ocf.log.error('failed to create target config directory')
                     return ocf.OCF_ERR_INSTALLED
 
         return ocf.OCF_SUCCESS
@@ -300,9 +290,8 @@ run on, which is used to generate consistent ALUA port group IDs.
         so_path = self.storage_object.path
         alua_dir = os.path.join(so_path, 'alua', pt_gp_name)
 
-        # FIXME: use HA logging
-        print("Creating ALUA TPG {name}; ID {id}".format(
-            name=pt_gp_name, id=pt_gp_id), file=sys.stderr)
+        ocf.log.debug("Creating ALUA TPG {name}; ID {id}".format(
+            name=pt_gp_name, id=pt_gp_id))
 
         if not os.path.isdir(alua_dir):
             os.mkdir(alua_dir)
@@ -360,9 +349,8 @@ run on, which is used to generate consistent ALUA port group IDs.
             # fabrics, the node with the most configured fabrics is preferred.
             score = num_target_ports * 1000
 
-            # FIXME: use HA logging
-            print("Setting master score to: {score}".format(score=score),
-                  file=sys.stderr)
+            ocf.log.debug("Setting master score to: {score}"
+                          .format(score=score))
 
             self._set_master_score(score)
         else:
@@ -379,15 +367,12 @@ run on, which is used to generate consistent ALUA port group IDs.
         # Check whether we need to do anything
         ret = self._monitor()
         if ret == ocf.OCF_SUCCESS:
-            # FIXME: use HA logging
-            print("Resource is already running", file=sys.stderr)
+            ocf.log.warning("Resource is already running")
             return ret
 
         so = self._create_storage_object()
 
-        # FIXME: use HA logging
-        print("Created storage object: {so.path}".format(so=so),
-              file=sys.stderr)
+        ocf.log.debug("Created storage object: {so.path}".format(so=so))
 
         # Configure ALUA
         if ocf.env.is_ms:
@@ -487,8 +472,7 @@ run on, which is used to generate consistent ALUA port group IDs.
             status = self._monitor()
 
             if status == ocf.OCF_SUCCESS:  # in slave mode
-                # FIXME: use HA logging
-                print("Attempting to promote.", file=sys.stderr)
+                ocf.log.info('Attempting to promote.')
 
                 # Set ALUA_ACCESS_STATE_ACTIVE_OPTIMIZED and preferred path
                 self.set_alua('alua_access_state', '0\n')
@@ -497,13 +481,11 @@ run on, which is used to generate consistent ALUA port group IDs.
                 # Go around the loop again to make sure we come up as
                 # OCF_RUNNING_MASTER
             elif status == ocf.OCF_NOT_RUNNING:
-                # FIXME: use HA logging
-                print("Trying to promote a resource that was not started!",
-                      file=sys.stderr)
+                ocf.log.error('Trying to promote a resource that was not '
+                              'started!')
                 break
             elif status == ocf.OCF_RUNNING_MASTER:
-                # FIXME: use HA logging
-                print("Promotion successful.", file=sys.stderr)
+                ocf.log.info('Promotion successful.')
                 ret = ocf.OCF_SUCCESS
                 self._update_master_score(status)
                 break
@@ -516,9 +498,8 @@ run on, which is used to generate consistent ALUA port group IDs.
         # avoid too tight pacemaker driven "recovery" loop if promotion keeps
         # failing for some reason
         if ret != ocf.OCF_SUCCESS:
-            # FIXME: use HA logging
-            print("Promotion failed; sleeping 15s to prevent tight recovery "
-                  "loop", file=sys.stderr)
+            ocf.log.error('Promotion failed; sleeping 15s to prevent tight '
+                          'recovery loop')
             time.sleep(15)
 
         return ret
@@ -534,19 +515,16 @@ run on, which is used to generate consistent ALUA port group IDs.
             status = self._monitor()
 
             if status == ocf.OCF_SUCCESS:  # in slave mode
-                # FIXME: use HA logging
-                print("Demotion successful.", file=sys.stderr)
+                ocf.log.info('Demotion successful.')
                 ret = ocf.OCF_SUCCESS
                 self._update_master_score(status)
                 break
             elif status == ocf.OCF_NOT_RUNNING:
-                # FIXME: use HA logging
-                print("Trying to demote a resource that was not started!",
-                      file=sys.stderr)
+                ocf.log.error('Trying to demote a resource that was not '
+                              'started!')
                 break
             elif status == ocf.OCF_RUNNING_MASTER:
-                # FIXME: use HA logging
-                print("Attempting to demote.", file=sys.stderr)
+                ocf.log.info('Attempting to demote.')
 
                 # Set ALUA_ACCESS_STATE_STANDBY and no preference
                 self.set_alua('alua_access_state', '2\n')
@@ -563,9 +541,8 @@ run on, which is used to generate consistent ALUA port group IDs.
         # avoid too tight pacemaker driven "recovery" loop if demotion keeps
         # failing for some reason
         if ret != ocf.OCF_SUCCESS:
-            # FIXME: use HA logging
-            print("Demotion failed; sleeping 15s to prevent tight recovery "
-                  "loop", file=sys.stderr)
+            ocf.log.error('Demotion failed; sleeping 15s to prevent tight '
+                          'recovery loop')
             time.sleep(15)
 
         return ret
@@ -585,50 +562,45 @@ run on, which is used to generate consistent ALUA port group IDs.
 
         if ocf.env.is_clone:
             if not ocf.env.is_ms:
-                # FIXME: use HA logging
-                print("This RA may only be used as a primitive or "
-                      "master/slave resource, not a clone.", file=sys.stderr)
+                ocf.log.error('This RA may only be used as a primitive or '
+                              'master/slave resource, not a clone.')
                 return ocf.OCF_ERR_CONFIGURED
 
             if int(ocf.env.reskey.get('CRM_meta_clone_max', 0)) != 2 or \
                int(ocf.env.reskey.get('CRM_meta_clone_node_max', 0)) != 1 or \
                int(ocf.env.reskey.get('CRM_meta_master_node_max', 0)) != 1 or \
                int(ocf.env.reskey.get('CRM_meta_master_max', 0)) != 1:
-                # FIXME: use HA logging
-                print("Clone options misconfigured. (expect: clone_max=2,"
-                      "clone_node_max=1,master_node_max=1,master_max=1)",
-                      file=sys.stderr)
+
+                ocf.log.error('Clone options misconfigured. (expect: '
+                              'clone_max=2,clone_node_max=1,master_node_max=1,'
+                              'master_max=1)')
                 return ocf.OCF_ERR_CONFIGURED
 
             if not self.alua_hosts:
-                # FIXME: use HA logging
-                print("alua_hosts parameter required for multistate resources",
-                      file=sys.stderr)
+                ocf.log.error('alua_hosts parameter required for multistate '
+                              'resources')
                 return ocf.OCF_ERR_CONFIGURED
 
             # Make sure our alua_ptgp_name is included in the alua_hosts list
             try:
                 self.alua_ptgp_id
             except ValueError:
-                # FIXME: use HA logging
-                print("alua_hosts does not include {node}".format(
-                    node=self.alua_ptgp_name), file=sys.stderr)
+                ocf.log.error("alua_hosts does not include {node}".format(
+                    node=self.alua_ptgp_name))
                 return ocf.OCF_ERR_CONFIGURED
 
-            print("Running as a multi-state resource", file=sys.stderr)
+            ocf.log.debug('Running as a multi-state resource')
 
         # Ensure the HBA type is in our list of allowable types
         if self.hba_type not in self.HBA_TYPE_MAP:
-            # FIXME: use HA logging
-            print("Unknown hba_type: {hba}".format(hba=self.hba_type))
+            ocf.log.error("Unknown hba_type: {hba}".format(hba=self.hba_type))
             return ocf.OCF_ERR_CONFIGURED
 
         if self.hba_type == 'iblock':
             # Check that the given device is a suitable block device for RTSLib
             if rtslib.utils.get_block_type(self.device) != 0:
-                # FIXME: use HA logging
-                print("Device is not a TYPE_DISK block device: {dev}".format(
-                    dev=self.device), file=sys.stderr)
+                ocf.log.error("Device is not a TYPE_DISK block device: {dev}"
+                              .format(dev=self.device))
                 return ocf.OCF_ERR_CONFIGURED
         elif self.hba_type == 'fileio':
             # device is a parameter string that can contain multiple options
@@ -647,14 +619,12 @@ run on, which is used to generate consistent ALUA port group IDs.
             bufio = devopts.get('fd_buffered_io')
 
             if bufio is not None and bufio != '1':
-                # FIXME: use HA logging
-                print("fd_buffered_io must be '1' or not set", file=sys.stderr)
+                ocf.log.error('fd_buffered_io must be "1" or not set')
                 return ocf.OCF_ERR_CONFIGURED
 
             if size is None and rtslib.utils.get_block_type(name) != 0:
-                # FIXME: use HA logging
-                print("fd_dev_size must be given unless fd_dev_name is a "
-                      "block device", file=sys.stderr)
+                ocf.log.error('fd_dev_size must be given unless fd_dev_name '
+                              'is a block device')
                 return ocf.OCF_ERR_CONFIGURED
         else:
             raise NotImplementedError('Missing checks')
