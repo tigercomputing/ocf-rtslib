@@ -24,6 +24,13 @@ import rtslib.utils
 import subprocess
 import sys
 
+try:
+    import netaddr
+except ImportError:
+    use_netaddr = False
+else:
+    use_netaddr = True
+
 from ocf.util import cached_property
 from rtslib import RTSLibError
 
@@ -71,7 +78,9 @@ spaces. Use shell syntax to escape special characters. Example: 0:iblock/volume
         default='0.0.0.0:3260', shortdesc='iSCSI Portal addresses',
         longdesc="""
 Space separated list of iSCSI network portal addresses. If unset, the default
-is to create a portal that listens on 0.0.0.0:3260.
+is to create a portal that listens on 0.0.0.0:3260. If the netaddr Python
+module is available IP network addresses (including netmasks) can be specified
+and any matching local IP address on the system will be added instead.
         """)
 
     alua_tpg = ocf.Parameter(
@@ -82,10 +91,6 @@ ALUA Target Port Group Name to set on all exported LUNs via this RA. The string
 are pairing this RA with the ocf:rtslib:backstore RA running in master/slave
 mode.
         """)
-
-    IP_PORT_RE = re.compile(
-        r'^(?:(?P<ipv4>[0-9.]+)|\[(?P<ipv6>[0-9a-fA-F:]+)\])'
-        r'(?::(?P<port>[0-9]+))?$')
 
     @cached_property
     def rtsroot(self):
@@ -156,6 +161,55 @@ mode.
             return platform.node()
         else:
             return self.alua_tpg
+
+    IP_PORT_RE = re.compile(
+        r'^(?:(?P<ipv4>[0-9.]+(?:/[0-9]+)?)|'
+        r'\[(?P<ipv6>[0-9a-fA-F:]+(?:/[0-9]+)?)\])'
+        r'(?::(?P<port>[0-9]+))?$')
+
+    @cached_property
+    def portal_addresses(self):
+        """
+        A list of IP addresses and port numbers to create iSCSI portals on.
+
+        Inspects the ``portals`` parameter, validates the values and returns a
+        list of (ip, port) tuples. If the input 'address' is in fact a network
+        address (including netmask) and the netaddr package is available, look
+        up the IP addresses on this system that fall within the network
+        instead.
+        """
+        addresses = []
+
+        if use_netaddr:
+            avail_addrs = [netaddr.IPAddress(x) for x in
+                           rtslib.utils.list_eth_ips()]
+
+        # Inspect each portal address separately
+        for portal in self.portals.split():
+            match = self.IP_PORT_RE.search(portal)
+            if not match:
+                raise ValueError("Invalid portal address: {0}".format(portal))
+
+            # Extract the IP address/network and port number
+            ip = match.group('ipv4') or match.group('ipv6')
+            port = int(match.group('port') or 3260)
+
+            # Is this a subnet mask?
+            if '/' in ip:
+                # We can only handle subnets if we can use netaddr
+                if not use_netaddr:
+                    raise ValueError(
+                        'Need python netaddr module to use subnets')
+
+                # Add all the matching addresses to the list
+                net = netaddr.IPNetwork(ip)
+                for addr in (addr for addr in avail_addrs if addr in net):
+                    addresses.append((str(addr), port))
+            else:
+                # Add the address and port to the list
+                addresses.append((ip, port))
+
+        return addresses
 
     def _setup(self):
         # Check that the target core is loaded
@@ -229,11 +283,7 @@ mode.
                 rtslib.MappedLUN(nacl, mapped_lun, tpg_lun)
 
         # Add all the network portals
-        for portal in self.portals.split():
-            match = self.IP_PORT_RE.search(portal)
-            ip = match.group('ipv4') or match.group('ipv6')
-            port = int(match.group('port')) or 3260
-
+        for ip, port in self.portal_addresses:
             rtslib.NetworkPortal(tpg, ip_address=ip, port=port, mode='create')
 
         # FIXME: We should support authentication properly
@@ -293,10 +343,14 @@ mode.
                               .format(initiator))
                 return ocf.OCF_ERR_CONFIGURED
 
-        for portal in self.portals.split():
-            match = self.IP_PORT_RE.search(portal)
-            if not match:
-                ocf.log.error("Invalid portal: {0}".format(portal))
+        try:
+            self.portal_addresses
+        except ValueError as e:
+            ocf.log.error(str(e))
+            return ocf.OCF_ERR_CONFIGURED
+        else:
+            if len(self.portal_addresses) == 0:
+                ocf.log.error('No valid portal addresses found.')
                 return ocf.OCF_ERR_CONFIGURED
 
         try:
