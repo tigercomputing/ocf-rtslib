@@ -264,6 +264,11 @@ mode.
         if tpg is None:
             tpg = rtslib.TPG(target, 1, mode='create')
 
+            # Enable the target as soon as possible. If something goes wrong
+            # further down, rtslib will fail to remove a non-enabled TPG, and
+            # Pacemaker will fence the node.
+            tpg.enable = True
+
         # Add the backstore LUNs
         luns = {}
         for lun, so in self.storage_objects.iteritems():
@@ -282,10 +287,6 @@ mode.
             for mapped_lun, tpg_lun in luns.iteritems():
                 rtslib.MappedLUN(nacl, mapped_lun, tpg_lun)
 
-        # Add all the network portals
-        for ip, port in self.portal_addresses:
-            rtslib.NetworkPortal(tpg, ip_address=ip, port=port, mode='create')
-
         # FIXME: We should support authentication properly
         # Disable authentication
         tpg.set_attribute('authentication', '0')
@@ -293,8 +294,10 @@ mode.
 
         # FIXME: Add support for setting parameters and attributes
 
-        # Enable the target
-        tpg.enable = True
+        # Add all the network portals. Do this last so initiators can't login
+        # before the target is fully configured.
+        for ip, port in self.portal_addresses:
+            rtslib.NetworkPortal(tpg, ip_address=ip, port=port, mode='create')
 
         return ocf.OCF_SUCCESS
 
