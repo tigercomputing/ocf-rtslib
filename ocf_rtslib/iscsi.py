@@ -341,8 +341,92 @@ mode.
         if tpg is None:
             return ocf.OCF_NOT_RUNNING
 
-        # FIXME: check the Node ACLs, LUNs, Mapped LUNs, and Network Portals
-        # are all present and correct
+        if not tpg.enable:
+            ocf.log.error("TPG is not enabled")
+            return ocf.OCF_ERR_GENERIC
+
+        # Check all the LUNs we want are in place
+        storage_objects = self.storage_objects
+        unseen_luns = set(storage_objects.keys())
+        for lun in tpg.luns:
+            # Ensure that we're supposed to have a LUN at this index
+            try:
+                unseen_luns.remove(lun.lun)
+            except KeyError:
+                ocf.log.error("Spurious LUN found: {0}".format(lun.lun))
+                return ocf.OCF_ERR_GENERIC
+
+            # Check that this LUN's storage object corresponds to the one we
+            # expect in this position
+            if lun.storage_object.path != storage_objects[lun.lun].path:
+                ocf.log.error("Unexpected LUN at index: {0}".format(lun.lun))
+                return ocf.OCF_ERR_GENERIC
+
+        # Check whether we are missing any LUNs
+        if unseen_luns:
+            ocf.log.error("Missing LUN(s)")
+            return ocf.OCF_ERR_GENERIC
+
+        # Check all the Node ACLs are in place
+        initiators = set(self.initiators.split())
+        for nacl in tpg.node_acls:
+            # Ensure we're supposed to have this NACL in place
+            try:
+                initiators.remove(nacl.node_wwn)
+            except KeyError:
+                ocf.log.error("Spurious Node ACL found: {0}".format(
+                    nacl.node_wwn))
+                return ocf.OCF_ERR_GENERIC
+
+            # Check that all the LUNs are mapped
+            unseen_luns = set(storage_objects.keys())
+            for mlun in nacl.mapped_luns:
+                idx = mlun.mapped_lun
+
+                # Check for spurious LUN mappings
+                try:
+                    unseen_luns.remove(idx)
+                except KeyError:
+                    ocf.log.error("Spurious LUN mapping found: {0}".format(
+                        idx))
+
+                # Check that the LUN mapping is 1-1
+                if idx != mlun.tpg_lun.lun:
+                    ocf.log.error("LUN mapping not 1-1: {0} != {1}".format(
+                        idx, mlun.tpg_lun.lun))
+                    return ocf.OCF_ERR_GENERIC
+
+                # Check that the LUN mapping points at the LUN we want
+                so = mlun.tpg_lun.storage_object
+                if so.path != storage_objects[idx].path:
+                    ocf.log.error("Unexpected LUN mapping at index {0}".format(
+                        idx))
+                    return ocf.OCF_ERR_GENERIC
+
+            # Check whether we are missing any LUN mappings
+            if unseen_luns:
+                ocf.log.error("Missing LUN mapping(s)")
+                return ocf.OCF_ERR_GENERIC
+
+        # Check for missing ACLs
+        if initiators:
+            ocf.log.error("Missing Node ACL(s)")
+            return ocf.OCF_ERR_GENERIC
+
+        # Check for Network Portals
+        portals = set(self.portal_addresses)
+        for portal in tpg.network_portals:
+            try:
+                portals.remove((portal.ip_address, portal.port))
+            except KeyError:
+                ocf.log.error("Spurious network portal found: {0} {1}".format(
+                    portal.ip_address, portal.port))
+                return ocf.OCF_ERR_GENERIC
+
+        # Check for missing portals
+        if portals:
+            ocf.log.error("Missing network portal(s)")
+            return ocf.OCF_ERR_GENERIC
 
         return ocf.OCF_SUCCESS
 
