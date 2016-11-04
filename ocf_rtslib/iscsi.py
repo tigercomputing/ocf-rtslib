@@ -319,6 +319,11 @@ mode.
         if tpg is None:
             return ocf.OCF_SUCCESS
 
+        # RTSLib can only delete targets that are enabled, so try to enable it
+        # if it isn't already.
+        if not tpg.enable:
+            tpg.enable = True
+
         # Just ask the TPG to delete itself, this takes care of all the
         # mapped LUNs, LUNs, Node ACLs, Network Portals, etc...
         tpg.delete()
