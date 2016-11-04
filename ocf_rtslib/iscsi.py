@@ -102,7 +102,18 @@ mode.
 
     @property
     def target(self):
-        for tgt in self.fabric.targets:
+        # Wrap the targets generator to swallow RTSLibNotInCFS which can happen
+        # if something else deletes a target during iteration.
+        def _wrapper(gen):
+            while True:
+                try:
+                    yield next(gen)
+                except StopIteration:
+                    raise
+                except rtslib.utils.RTSLibNotInCFS:
+                    pass
+
+        for tgt in _wrapper(self.fabric.targets):
             if tgt.wwn == self.iqn:
                 return tgt
 
