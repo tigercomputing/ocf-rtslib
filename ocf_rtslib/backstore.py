@@ -15,6 +15,7 @@
 # with this program; if not, write to the Free Software Foundation, Inc.,
 # 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
+import errno
 import fcntl
 import ocf
 import os
@@ -126,7 +127,24 @@ run on, which is used to generate consistent ALUA port group IDs.
     def storage_object(self):
         try:
             for bs in self.rtsroot.backstores:
-                if bs.plugin != self.hba_type:
+                # In Linux 4.7 kernels, the hba_info file in configfs
+                # intermittently goes missing. If we get an ENOENT, retry a few
+                # times until it maybe appears.
+                plugin = None
+                for i in range(1, 10):
+                    try:
+                        plugin = bs.plugin
+                    except IOError as e:
+                        if e.errno == errno.ENOENT:
+                            continue
+                        raise
+                    else:
+                        break
+
+                if plugin is None:
+                    break
+
+                if plugin != self.hba_type:
                     continue
 
                 for so in bs.storage_objects:
