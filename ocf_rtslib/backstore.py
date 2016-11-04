@@ -126,6 +126,11 @@ run on, which is used to generate consistent ALUA port group IDs.
     @property
     def storage_object(self):
         try:
+            return self.__storage_object
+        except AttributeError:
+            pass
+
+        try:
             for bs in self.rtsroot.backstores:
                 # In Linux 4.7 kernels, the hba_info file in configfs
                 # intermittently goes missing. If we get an ENOENT, retry a few
@@ -149,6 +154,7 @@ run on, which is used to generate consistent ALUA port group IDs.
 
                 for so in bs.storage_objects:
                     if so.name == self.name:
+                        self.__storage_object = so
                         return so
         except RTSLibError:
             # target core probably isn't loaded
