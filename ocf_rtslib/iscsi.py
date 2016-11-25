@@ -144,6 +144,10 @@ mode.
         """
         A dictionary of LUN number => storage object
         """
+        try:
+            return self.__storage_objects
+        except AttributeError:
+            pass
 
         try:
             result = {}
@@ -185,6 +189,7 @@ mode.
                     raise ValueError("Backstore not found: {0}".format(
                         hbaname))
 
+            self.__storage_objects = result
             return result
         except RTSLibError:
             # target core probably isn't loaded
